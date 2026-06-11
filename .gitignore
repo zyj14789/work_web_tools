@@ -1,5 +1,4 @@
-node_modules/
-dist/
+.idea/
 *.zip
 .DS_Store
 Thumbs.db
