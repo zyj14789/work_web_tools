@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
   "use strict";
 
   // ============================================================
@@ -81,7 +81,7 @@
 
   var DEFAULT_DOMAINS = ["hrmobi.cn", "yumobi.cn", "focusmob.cn"];
 
-  var DEFAULT_TOOLS = {
+    var DEFAULT_TOOLS = {
     floatingBall: {
       id: "floatingBall",
       name: "悬浮球",
@@ -96,9 +96,15 @@
       enabled: true,
       icon: "存",
     },
+    clipboardShelf: {
+      id: "clipboardShelf",
+      name: "临存台面",
+      description: "保存最近复制记录，点击粘贴",
+      enabled: true,
+      icon: "台",
+    },
   };
-
-  var activeTools = {};
+var activeTools = {};
 
   // ===== Domain =====
   function matchesDomain(hostname, domain) {
@@ -216,7 +222,7 @@
 
   pushConfigToMain();
 
-  document.addEventListener("cb-network-capture", function (e) {
+  function onNetworkCapture(e) {
     if (!e.detail) { log("capture event no detail"); return; }
     var body = e.detail.body;
     var url = e.detail.url || "?";
@@ -229,7 +235,7 @@
       parsed = JSON.parse(body);
       log("capture JSON OK, keys=" + Object.keys(parsed).length);
     } catch (err) {
-      log("capture SKIP: not JSON —" + String(err).slice(0, 60));
+      log("capture SKIP: not JSON " + String(err).slice(0, 60));
       return;
     }
 
@@ -243,7 +249,9 @@
     } else {
       log("capture NOFLASH: ballTool=" + (ballTool ? "exists" : "null"));
     }
-  });
+  }
+
+  document.addEventListener("cb-network-capture", onNetworkCapture);
 
   // ===== Floating ball (deferred until <body> exists) =====
   function initFloatingBall() {
@@ -260,7 +268,6 @@
 
   // ============================================================
   //  Tool: 悬浮球
-  // ============================================================
   var FloatingBallTool = {
     POS_STORAGE_KEY: "cb_floating_ball_pos",
     BALL_SIZE: 56,
@@ -470,7 +477,6 @@
 
   // ============================================================
   //  Tool: 文本保存（下载逻辑由 background 的 executeScript 注入）
-  // ============================================================
   var TxtSaverTool = {
     create: function () {
       log("TxtSaverTool created (background handles download)");
@@ -481,10 +487,601 @@
   };
 
   // ============================================================
+  //  Tool: 临存台面 (Clipboard Shelf)
+  // ============================================================
+  var ClipboardShelfTool = {
+    STORAGE_KEY: "cb_clipboard_shelf",
+    MAX_ITEMS: 10,
+    panel: null, itemList: null, toggleBtn: null, isVisible: true,
+    items: [],
+
+    create: function () {
+      var self = this;
+      log("ClipboardShelfTool create");
+      this.loadAndRender();
+      this.bindCopyListener();
+    },
+
+    destroy: function () {
+      log("ClipboardShelfTool destroy");
+      this.unbindCopyListener();
+      document.removeEventListener("mousemove", this._onDragMove);
+      document.removeEventListener("mouseup", this._onDragEnd);
+      document.removeEventListener("touchmove", this._onDragMove);
+      document.removeEventListener("touchend", this._onDragEnd);
+      if (this._onDocClick) {
+        document.removeEventListener("click", this._onDocClick, true);
+        this._onDocClick = null;
+      }
+      if (this.panel) { this.panel.remove(); this.panel = null; this.itemList = null; this.toggleBtn = null; this._opacityPopup = null; }
+    },
+
+    loadAndRender: function () {
+      var self = this;
+      chrome.storage.local.get(this.STORAGE_KEY, function (result) {
+        self.items = result[self.STORAGE_KEY] || [];
+        if (self.items.length === 0 && !self.panel) {
+          self.buildPanel();
+        }
+        if (self.panel) self.renderList();
+      });
+      if (!this.panel && this.items.length === 0) {
+        this.buildPanel();
+      }
+    },
+
+    buildPanel: function () {
+      var self = this;
+
+      // Container
+      this.panel = document.createElement("div");
+      this.panel.id = "cb-clipboard-shelf";
+
+      // Header
+      var header = document.createElement("div");
+      header.className = "cb-shelf-header";
+
+      // Left-side buttons group
+      var leftGroup = document.createElement("div");
+      leftGroup.className = "cb-shelf-left-btns";
+
+      // Drag handle
+      var dragBtn = document.createElement("button");
+      dragBtn.className = "cb-shelf-drag-btn";
+      dragBtn.title = "按住拖动窗口";
+      dragBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="3" cy="2" r="1.2" fill="currentColor"/><circle cx="7" cy="2" r="1.2" fill="currentColor"/><circle cx="3" cy="6" r="1.2" fill="currentColor"/><circle cx="7" cy="6" r="1.2" fill="currentColor"/><circle cx="3" cy="10" r="1.2" fill="currentColor"/><circle cx="7" cy="10" r="1.2" fill="currentColor"/></svg>';
+      dragBtn.addEventListener("mousedown", function (e) { e.stopPropagation(); e.preventDefault(); self.onDragStart(e); });
+      dragBtn.addEventListener("touchstart", function (e) { e.stopPropagation(); e.preventDefault(); self.onDragStart(e); });
+      leftGroup.appendChild(dragBtn);
+
+      // Opacity button
+      var opacityBtn = document.createElement("button");
+      opacityBtn.className = "cb-shelf-opacity-btn";
+      opacityBtn.title = "透明度设置";
+      opacityBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 1 A5 5 0 0 1 6 11" fill="currentColor" opacity="0.5"/></svg>';
+      opacityBtn.addEventListener("click", function (e) { e.stopPropagation(); self.toggleOpacityPopup(); });
+      leftGroup.appendChild(opacityBtn);
+
+      header.appendChild(leftGroup);
+
+      // Title
+      var title = document.createElement("span");
+      title.className = "cb-shelf-title";
+      title.textContent = "临存台面";
+      header.appendChild(title);
+
+      // Toggle button
+      this.toggleBtn = document.createElement("button");
+      this.toggleBtn.className = "cb-shelf-toggle";
+      this.toggleBtn.title = "折叠/展开";
+      this.toggleBtn.textContent = "\u2212";
+      this.toggleBtn.addEventListener("click", function (e) { e.stopPropagation(); self.togglePanel(); });
+      header.appendChild(this.toggleBtn);
+
+      // Clear button
+      var clearBtn = document.createElement("button");
+      clearBtn.className = "cb-shelf-clear";
+      clearBtn.title = "清空记录";
+      clearBtn.textContent = "清空";
+      clearBtn.addEventListener("click", function (e) { e.stopPropagation(); self.clearAll(); });
+      header.appendChild(clearBtn);
+
+      this.panel.appendChild(header);
+
+      // Item list
+      this.itemList = document.createElement("div");
+      this.itemList.className = "cb-shelf-list";
+      this.panel.appendChild(this.itemList);
+
+      // Empty placeholder
+      var empty = document.createElement("div");
+      empty.className = "cb-shelf-empty";
+      empty.textContent = "暂无复制记录";
+      empty.id = "cb-shelf-empty-msg";
+      this.itemList.appendChild(empty);
+
+      document.body.appendChild(this.panel);
+
+      // Opacity popup (hidden by default)
+      this.buildOpacityPopup();
+
+      // Load saved opacity
+      this.loadOpacity();
+      this.renderList();
+
+      // Bind drag handlers on document
+      this._onDragMove = this.onDragMove.bind(this);
+      this._onDragEnd = this.onDragEnd.bind(this);
+    },
+
+    renderList: function () {
+      if (!this.itemList) return;
+      var self = this;
+
+      // Remove old items, keep empty msg
+      var oldItems = this.itemList.querySelectorAll(".cb-shelf-item");
+      oldItems.forEach(function (el) { el.remove(); });
+
+      var emptyMsg = document.getElementById("cb-shelf-empty-msg");
+      if (this.items.length === 0) {
+        if (emptyMsg) emptyMsg.style.display = "block";
+        return;
+      }
+      if (emptyMsg) emptyMsg.style.display = "none";
+
+      for (var i = 0; i < this.items.length; i++) {
+        var item = this.items[i];
+        var el = document.createElement("div");
+        el.className = "cb-shelf-item";
+        el.title = item.text;
+        el.textContent = item.text;
+        el.setAttribute("data-index", i);
+
+        // Do paste on mousedown -- before browser has any chance to move focus
+        el.addEventListener("mousedown", function (e) {
+          e.preventDefault();  // stop default: no text selection, no focus change
+          e.stopPropagation();
+          var idx = parseInt(this.getAttribute("data-index"));
+          self.pasteItem(idx);
+        });
+        this.itemList.appendChild(el);
+      }
+    },
+
+    bindCopyListener: function () {
+      var self = this;
+      this._onCopy = this.onCopy.bind(this);
+      this._hookedIframes = [];
+
+      // Top-level document
+      document.addEventListener("copy", this._onCopy);
+
+      // Hook existing iframes
+      var iframes = document.querySelectorAll("iframe");
+      for (var i = 0; i < iframes.length; i++) {
+        self._hookIframe(iframes[i]);
+      }
+
+      // Watch for dynamically added iframes
+      this._iframeObserver = new MutationObserver(function (mutations) {
+        mutations.forEach(function (m) {
+          m.addedNodes.forEach(function (node) {
+            if (node.nodeName === "IFRAME") {
+              self._hookIframe(node);
+            } else if (node.querySelectorAll) {
+              var nested = node.querySelectorAll("iframe");
+              for (var j = 0; j < nested.length; j++) {
+                self._hookIframe(nested[j]);
+              }
+            }
+          });
+        });
+      });
+      this._iframeObserver.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    },
+
+    _hookIframe: function (iframe) {
+      // Avoid duplicate hooks on the same iframe element
+      if (this._hookedIframes.some(function (h) { return h.iframe === iframe; })) return;
+
+      var self = this;
+      var onLoad = function () {
+        self._attachCopyToIframeDoc(iframe, onLoad);
+      };
+
+      iframe.addEventListener("load", onLoad);
+      this._hookedIframes.push({ iframe: iframe, doc: null, _onLoad: onLoad });
+
+      // If the iframe is already loaded, hook immediately
+      if (iframe.contentDocument && iframe.contentDocument.readyState === "complete") {
+        onLoad();
+      }
+    },
+
+    _attachCopyToIframeDoc: function (iframe, onLoad) {
+      try {
+        var doc = iframe.contentDocument;
+        if (!doc) return;
+        // Skip if we already hooked this exact document object (handles re-load of same doc)
+        var entry = this._hookedIframes.filter(function (h) { return h.iframe === iframe; })[0];
+        if (entry && entry.doc === doc) return;
+        doc.addEventListener("copy", this._onCopy);
+        if (entry) entry.doc = doc;
+        log("ClipboardShelf: hooked iframe " + (iframe.src || "(srcdoc)").slice(0, 60));
+        // Also inject hook.js for network interception inside this iframe
+        this._injectHookIntoIframeDoc(doc);
+      } catch (e) {
+        // Cross-origin iframe -- can't access, silently skip
+      }
+    },
+
+    _injectHookIntoIframeDoc: function (doc) {
+      // Avoid double injection into the same document
+      if (!this._hookedIframeDocs) this._hookedIframeDocs = [];
+      if (this._hookedIframeDocs.indexOf(doc) !== -1) return;
+      this._hookedIframeDocs.push(doc);
+
+      // Read config from main page meta (injected during init)
+      var mainMeta = document.querySelector('meta[name="cb-config"]');
+      var cfgContent = mainMeta ? mainMeta.content : '{"pattern":"listDataApiLog.action","captureAll":false,"showLog":false}';
+
+      // Inject config meta into iframe
+      var meta = doc.createElement("meta");
+      meta.name = "cb-config";
+      meta.content = cfgContent;
+      (doc.head || doc.documentElement).appendChild(meta);
+
+      // Inject hook.js script
+      var script = doc.createElement("script");
+      script.src = chrome.runtime.getURL("hook.js");
+      (doc.head || doc.documentElement).appendChild(script);
+
+      // Listen for capture events from this iframe
+      doc.addEventListener("cb-network-capture", onNetworkCapture);
+
+      log("ClipboardShelf: injected hook into iframe");
+    },
+
+    unbindCopyListener: function () {
+      if (this._onCopy) {
+        document.removeEventListener("copy", this._onCopy);
+        // Clean up iframe listeners (both load and copy)
+        if (this._hookedIframes) {
+          for (var i = 0; i < this._hookedIframes.length; i++) {
+            var h = this._hookedIframes[i];
+            // Remove load listener from the iframe element
+            if (h._onLoad) {
+              h.iframe.removeEventListener("load", h._onLoad);
+            }
+            // Remove copy listener from the hooked document
+            if (h.doc) {
+              try { h.doc.removeEventListener("copy", this._onCopy); } catch (e) {}
+            }
+          }
+          this._hookedIframes = [];
+        }
+        // Clean up network capture listeners on iframe docs
+        if (this._hookedIframeDocs) {
+          for (var j = 0; j < this._hookedIframeDocs.length; j++) {
+            try {
+              this._hookedIframeDocs[j].removeEventListener("cb-network-capture", onNetworkCapture);
+            } catch (e) {}
+          }
+          this._hookedIframeDocs = [];
+        }
+        this._onCopy = null;
+      }
+      if (this._iframeObserver) {
+        this._iframeObserver.disconnect();
+        this._iframeObserver = null;
+      }
+    },
+
+    onCopy: function (e) {
+      var text = "";
+
+      // Use the document where the event originated (works for iframe copy events)
+      var targetDoc = e.target && e.target.ownerDocument;
+      if (!targetDoc) return;
+
+      // Check input/textarea active element first (their selection is not via getSelection)
+      var el = targetDoc.activeElement;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
+        var start = el.selectionStart;
+        var end = el.selectionEnd;
+        if (start !== undefined && end !== undefined && start < end) {
+          text = el.value.substring(start, end).trim();
+        }
+      }
+
+      // Fallback: document-level selection (from the event's document)
+      if (!text) {
+        var selection = targetDoc.defaultView.getSelection();
+        if (selection && !selection.isCollapsed) {
+          text = selection.toString().trim();
+        }
+      }
+
+      if (!text) return;
+      this.addItem(text);
+    },
+
+    addItem: function (text) {
+      var self = this;
+
+      // Deduplicate: if same text already exists, remove it first
+      this.items = this.items.filter(function (item) { return item.text !== text; });
+
+      this.items.unshift({
+        text: text,
+        time: Date.now()
+      });
+
+      // Trim to MAX_ITEMS
+      if (this.items.length > this.MAX_ITEMS) {
+        this.items = this.items.slice(0, this.MAX_ITEMS);
+      }
+
+      this.persistAndRender();
+    },
+
+    persistAndRender: function () {
+      var self = this;
+      var data = {};
+      data[this.STORAGE_KEY] = this.items;
+      chrome.storage.local.set(data, function () {
+        if (self.panel) self.renderList();
+      });
+    },
+
+    pasteItem: function (index) {
+      var item = this.items[index];
+      if (!item) return;
+
+      var text = item.text;
+
+      // Copy to clipboard
+      try {
+        navigator.clipboard.writeText(text).then(function () {
+          log("ClipboardShelf: copied to clipboard, len=" + text.length);
+        }).catch(function () {
+          fallbackCopy(text);
+          log("ClipboardShelf: fallback copy, len=" + text.length);
+        });
+      } catch (err) {
+        fallbackCopy(text);
+        log("ClipboardShelf: fallback copy (try), len=" + text.length);
+      }
+
+      // Capture focused element now (mousedown hasn't moved focus yet)
+      var target = document.activeElement;
+      this.tryPasteToFocused(text, target);
+    },
+
+    tryPasteToFocused: function (text, targetEl) {
+      var el = targetEl || document.activeElement;
+      if (!el) return;
+
+      var tag = el.tagName.toLowerCase();
+      var isEditable = el.isContentEditable ||
+        tag === "input" || tag === "textarea" ||
+        (el.getAttribute && el.getAttribute("role") === "textbox");
+
+      if (!isEditable) return;
+
+      // Restore focus first -- browser autocomplete dropdowns may have stolen it
+      el.focus();
+
+      // Use rAF to let the browser settle focus before manipulating input
+      var self = this;
+      var doPaste = function () {
+        try {
+          if (tag === "input" || tag === "textarea") {
+            var start = el.selectionStart;
+            var end = el.selectionEnd;
+            if (start !== undefined && end !== undefined) {
+              var before = el.value.substring(0, start);
+              var after = el.value.substring(end);
+              el.value = before + text + after;
+              var newPos = start + text.length;
+              el.setSelectionRange(newPos, newPos);
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+              el.focus();
+              return;
+            }
+          }
+
+          if (el.isContentEditable || (el.getAttribute && el.getAttribute("role") === "textbox")) {
+            var sel = window.getSelection();
+            if (sel.rangeCount > 0) {
+              var range = sel.getRangeAt(0);
+              range.deleteContents();
+              var textNode = document.createTextNode(text);
+              range.insertNode(textNode);
+              range.setStartAfter(textNode);
+              range.collapse(true);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              el.focus();
+              return;
+            }
+          }
+        } catch (err) {
+          log("ClipboardShelf: paste error " + err);
+        }
+      };
+
+      // Defer paste to let focus settle (handles autocomplete popup dismissal)
+      if (typeof requestAnimationFrame !== "undefined") {
+        requestAnimationFrame(doPaste);
+      } else {
+        setTimeout(doPaste, 0);
+      }
+    },
+
+    togglePanel: function () {
+      if (!this.itemList) return;
+      var list = this.itemList;
+      if (list.style.display === "none") {
+        list.style.display = "";
+        this.toggleBtn.textContent = "\u2212";
+      } else {
+        list.style.display = "none";
+        this.toggleBtn.textContent = "+";
+      }
+    },
+
+    clearAll: function () {
+      this.items = [];
+      var data = {};
+      data[this.STORAGE_KEY] = [];
+      var self = this;
+      chrome.storage.local.set(data, function () {
+        if (self.panel) self.renderList();
+      });
+    },
+
+    // ===== Drag =====
+    onDragStart: function (e) {
+      this._dragging = true;
+      this._dragStartX = e.touches ? e.touches[0].clientX : e.clientX;
+      this._dragStartY = e.touches ? e.touches[0].clientY : e.clientY;
+      var rect = this.panel.getBoundingClientRect();
+      this._panelStartX = rect.left;
+      this._panelStartY = rect.top;
+
+      // Switch from right/top positioning to left/top for smooth drag
+      this.panel.style.right = "";
+      this.panel.style.top = "";
+      this.panel.style.left = this._panelStartX + "px";
+      this.panel.style.top = this._panelStartY + "px";
+      this.panel.style.transition = "none";
+      this.panel.classList.add("cb-shelf-dragging");
+
+      document.addEventListener("mousemove", this._onDragMove, { passive: false });
+      document.addEventListener("mouseup", this._onDragEnd);
+      document.addEventListener("touchmove", this._onDragMove, { passive: false });
+      document.addEventListener("touchend", this._onDragEnd);
+    },
+
+    onDragMove: function (e) {
+      if (!this._dragging) return;
+      e.preventDefault();
+      var cx = e.touches ? e.touches[0].clientX : e.clientX;
+      var cy = e.touches ? e.touches[0].clientY : e.clientY;
+      var dx = cx - this._dragStartX;
+      var dy = cy - this._dragStartY;
+      this.panel.style.left = Math.max(0, Math.min(this._panelStartX + dx, window.innerWidth - this.panel.offsetWidth)) + "px";
+      this.panel.style.top = Math.max(0, Math.min(this._panelStartY + dy, window.innerHeight - 40)) + "px";
+    },
+
+    onDragEnd: function () {
+      if (!this._dragging) return;
+      this._dragging = false;
+      this.panel.classList.remove("cb-shelf-dragging");
+      this.panel.style.transition = "";
+      document.removeEventListener("mousemove", this._onDragMove);
+      document.removeEventListener("mouseup", this._onDragEnd);
+      document.removeEventListener("touchmove", this._onDragMove);
+      document.removeEventListener("touchend", this._onDragEnd);
+    },
+
+    // ===== Opacity =====
+    OPACITY_STORAGE_KEY: "cb_shelf_opacity",
+
+    buildOpacityPopup: function () {
+      var self = this;
+      this._opacityPopup = document.createElement("div");
+      this._opacityPopup.className = "cb-shelf-opacity-popup";
+      this._opacityPopup.style.display = "none";
+
+      var presets = [100, 80, 60, 40, 20];
+      for (var i = 0; i < presets.length; i++) {
+        (function (val) {
+          var opt = document.createElement("div");
+          opt.className = "cb-shelf-opacity-opt";
+          opt.textContent = val + "%";
+          opt.setAttribute("data-val", val);
+          opt.addEventListener("click", function (e) {
+            e.stopPropagation();
+            self.setOpacity(val);
+          });
+          self._opacityPopup.appendChild(opt);
+        })(presets[i]);
+      }
+
+      // Close popup when clicking outside
+      this._onDocClick = function (e) {
+        if (self._opacityPopup && !self._opacityPopup.contains(e.target) &&
+            !e.target.closest(".cb-shelf-opacity-btn")) {
+          self._opacityPopup.style.display = "none";
+        }
+      };
+      document.addEventListener("click", this._onDocClick, true);
+
+      this.panel.appendChild(this._opacityPopup);
+    },
+
+    setOpacity: function (pct) {
+      var opacity = pct / 100;
+      this.panel.style.setProperty("--shelf-bg-opacity", opacity);
+      this._currentOpacity = pct;
+
+      // Highlight active
+      var opts = this._opacityPopup.querySelectorAll(".cb-shelf-opacity-opt");
+      opts.forEach(function (o) {
+        o.classList.toggle("active", parseInt(o.getAttribute("data-val")) === pct);
+      });
+
+      this._opacityPopup.style.display = "none";
+
+      // Persist
+      var data = {};
+      data[this.OPACITY_STORAGE_KEY] = pct;
+      chrome.storage.local.set(data);
+    },
+
+    loadOpacity: function () {
+      var self = this;
+      chrome.storage.local.get(this.OPACITY_STORAGE_KEY, function (result) {
+        var pct = result[self.OPACITY_STORAGE_KEY] || 88;
+        self.panel.style.setProperty("--shelf-bg-opacity", pct / 100);
+        self._currentOpacity = pct;
+
+        var opts = self._opacityPopup.querySelectorAll(".cb-shelf-opacity-opt");
+        opts.forEach(function (o) {
+          o.classList.toggle("active", parseInt(o.getAttribute("data-val")) === pct);
+        });
+      });
+    },
+
+    toggleOpacityPopup: function () {
+      if (!this._opacityPopup) return;
+      var popup = this._opacityPopup;
+      var currentPct = this._currentOpacity;
+      if (popup.style.display === "none") {
+        popup.style.display = "block";
+        // Update active highlight
+        var opts = popup.querySelectorAll(".cb-shelf-opacity-opt");
+        opts.forEach(function (o) {
+          o.classList.toggle("active", parseInt(o.getAttribute("data-val")) === currentPct);
+        });
+      } else {
+        popup.style.display = "none";
+      }
+    },
+  };
+
+  // ============================================================
   //  Tool Registry
   // ============================================================
   var ToolRegistry = {
-    constructors: { floatingBall: FloatingBallTool, txtSaver: TxtSaverTool },
+    constructors: { floatingBall: FloatingBallTool, txtSaver: TxtSaverTool, clipboardShelf: ClipboardShelfTool },
 
     syncTools: async function () {
       var config = await this.getFullConfig();

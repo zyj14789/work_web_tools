@@ -23,6 +23,10 @@
       ],
       hasDomainManager: false,
     },
+    clipboardShelf: {
+      fields: [],
+      hasDomainManager: false,
+    },
   };
 
   var TOOLS = [
@@ -38,6 +42,13 @@
       name: "文本保存",
       description: "选中文本右键，保存为txt文件",
       icon: "存",
+      enabled: true,
+    },
+    {
+      id: "clipboardShelf",
+      name: "临存台面",
+      description: "保存最近复制记录，点击粘贴",
+      icon: "台",
       enabled: true,
     },
   ];
@@ -197,7 +208,7 @@
           html += '<div class="domain-section">';
           html += '<div class="domain-divider"></div>';
 
-          html += '<div class="settings-label">默认域名（不可修改）</div>';
+          html += '<div class="settings-label">生效域名</div>';
           html += '<div class="domain-tag-list">';
           DEFAULT_DOMAINS.forEach(function (d) {
             html += '<span class="domain-tag domain-tag-default">' + d + '</span>';
@@ -205,15 +216,15 @@
           html += '</div>';
 
           if (currentTabHostname && !currentAlreadyAdded) {
-            html += '<div class="settings-label" style="margin-top:10px">当前站点</div>';
+            html += '<div class="settings-label" style="margin-top:10px">添加当前站点</div>';
             html += '<div class="domain-add-row">';
             html += '<span class="current-hostname">' + escapeHtml(currentTabHostname) + '</span>';
-            html += '<button class="domain-add-btn" data-tool="' + tool.id + '">添加此站点</button>';
+            html += '<button class="domain-add-btn" data-tool="' + tool.id + '">添加</button>';
             html += '</div>';
           }
 
           if (customDomains.length > 0) {
-            html += '<div class="settings-label" style="margin-top:10px">自定义域名</div>';
+            html += '<div class="settings-label" style="margin-top:10px">已添加</div>';
             html += '<div class="domain-list" data-tool="' + tool.id + '">';
             customDomains.forEach(function (d) {
               html += renderDomainItem(tool.id, d);

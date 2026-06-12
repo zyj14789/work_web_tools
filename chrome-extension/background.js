@@ -1,6 +1,7 @@
 // ===== 工具集 Background Service Worker =====
 
 const TOOLS_STORAGE_KEY = "cb_tools_config";
+const SETTINGS_STORAGE_KEY = "cb_tool_settings";
 const CONTEXT_MENU_ID = "cb-save-txt";
 
 // 安装/更新时设置默认配置（仅首次，不覆盖已有设置）
@@ -50,16 +51,21 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== CONTEXT_MENU_ID || !info.selectionText || !tab || tab.id == null) return;
 
   const text = info.selectionText;
-  const filename = "selected-text-" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + ".txt";
 
-  // 使用 downloads API 直接下载，避免 Blob URL 的 origin 问题
-  const dataUrl = "data:text/plain;charset=utf-8," + encodeURIComponent(text);
-  chrome.downloads.download({
-    url: dataUrl,
-    filename: filename,
-    saveAs: true,
-  }).catch(() => {
-    // 下载失败，忽略
+  // 读取用户设置的文件名前缀
+  chrome.storage.local.get(SETTINGS_STORAGE_KEY, (result) => {
+    const settings = result[SETTINGS_STORAGE_KEY] || {};
+    const txtSettings = settings.txtSaver || {};
+    const prefix = (txtSettings.filenamePrefix && txtSettings.filenamePrefix.trim()) || "selected-text";
+    const random = Math.random().toString(36).slice(2, 8);
+    const filename = prefix + "-" + random + ".txt";
+
+    const dataUrl = "data:text/plain;charset=utf-8," + encodeURIComponent(text);
+    chrome.downloads.download({
+      url: dataUrl,
+      filename: filename,
+      saveAs: true,
+    }).catch(() => {});
   });
 });
 
