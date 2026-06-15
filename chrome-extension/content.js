@@ -105,6 +105,7 @@
     },
   };
 var activeTools = {};
+var _firstCaptureDone = false;
 
   // ===== Domain =====
   function matchesDomain(hostname, domain) {
@@ -240,7 +241,13 @@ var activeTools = {};
     }
 
     var jsonStr = JSON.stringify(parsed, null, 2);
-    copyToClipboard(jsonStr);
+    // Skip clipboard write on first capture to preserve user's existing clipboard
+    if (_firstCaptureDone) {
+      copyToClipboard(jsonStr);
+    } else {
+      _firstCaptureDone = true;
+      log("capture FIRST: skipped clipboard write to preserve user data");
+    }
 
     var ballTool = activeTools.floatingBall;
     if (ballTool && typeof ballTool.flash === "function") {
