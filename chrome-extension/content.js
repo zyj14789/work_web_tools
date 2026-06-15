@@ -1116,7 +1116,20 @@ var activeTools = {};
   };
 
   chrome.storage.onChanged.addListener(function (changes, areaName) {
-    if (areaName === "local" && (changes[TOOLS_STORAGE_KEY] || changes[SETTINGS_STORAGE_KEY])) {
+    if (areaName !== "local") return;
+
+    // Cross-tab sync for clipboard shelf
+    var shelfChange = changes["cb_clipboard_shelf"];
+    if (shelfChange && shelfChange.newValue) {
+      var shelfTool = activeTools.clipboardShelf;
+      if (shelfTool && shelfTool.panel) {
+        shelfTool.items = shelfChange.newValue;
+        shelfTool.renderList();
+        log("ClipboardShelf: synced from another tab, items=" + shelfChange.newValue.length);
+      }
+    }
+
+    if (changes[TOOLS_STORAGE_KEY] || changes[SETTINGS_STORAGE_KEY]) {
       if (changes[SETTINGS_STORAGE_KEY]) {
         log("storage changed, pushing config");
         pushConfigToMain();
