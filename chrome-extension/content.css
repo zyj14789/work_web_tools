@@ -145,7 +145,8 @@
   position: fixed;
   z-index: 2147483646;
   top: 8px;
-  right: 8px;
+  left: 50%;
+  transform: translateX(-50%);
   width: 280px;
   max-height: 360px;
   background: rgba(18, 20, 29, var(--shelf-bg-opacity, 0.88));
