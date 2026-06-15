@@ -342,8 +342,10 @@ var activeTools = {};
       this.boundHandlers.onKeyDown = this.onKeyDown.bind(this);
       this.boundHandlers.onResize = this.onResize.bind(this);
 
-      this.ball.addEventListener("mousedown", this.boundHandlers.onDragStart, { passive: false });
-      this.ball.addEventListener("touchstart", this.boundHandlers.onDragStart, { passive: false });
+      this.ball.addEventListener("pointerdown", this.boundHandlers.onDragStart, { passive: false });
+      this.ball.addEventListener("pointermove", this.boundHandlers.onDragMove, { passive: false });
+      this.ball.addEventListener("pointerup", this.boundHandlers.onDragEnd);
+      this.ball.addEventListener("pointercancel", this.boundHandlers.onDragEnd);
       this.ball.addEventListener("click", this.boundHandlers.onClick);
       this.ball.addEventListener("contextmenu", this.boundHandlers.onContextMenu);
       this.restoreTab.addEventListener("click", this.boundHandlers.onRestoreClick);
@@ -353,8 +355,10 @@ var activeTools = {};
 
     unbindEvents: function () {
       if (!this.ball) return;
-      this.ball.removeEventListener("mousedown", this.boundHandlers.onDragStart);
-      this.ball.removeEventListener("touchstart", this.boundHandlers.onDragStart);
+      this.ball.removeEventListener("pointerdown", this.boundHandlers.onDragStart);
+      this.ball.removeEventListener("pointermove", this.boundHandlers.onDragMove);
+      this.ball.removeEventListener("pointerup", this.boundHandlers.onDragEnd);
+      this.ball.removeEventListener("pointercancel", this.boundHandlers.onDragEnd);
       this.ball.removeEventListener("click", this.boundHandlers.onClick);
       this.ball.removeEventListener("contextmenu", this.boundHandlers.onContextMenu);
       if (this.restoreTab) this.restoreTab.removeEventListener("click", this.boundHandlers.onRestoreClick);
@@ -380,12 +384,19 @@ var activeTools = {};
     onDragStart: function (e) {
       if (e.button !== undefined && e.button !== 0) return;
       e.preventDefault();
+
+      // Pointer capture keeps all subsequent events on the ball,
+      // preventing detachment during fast drags.
+      if (this.ball.setPointerCapture) {
+        this.ball.setPointerCapture(e.pointerId);
+      }
+
       this.isDragging = true;
       this.hasMoved = false;
       this.ball.classList.add("dragging");
 
-      var cx = e.touches ? e.touches[0].clientX : e.clientX;
-      var cy = e.touches ? e.touches[0].clientY : e.clientY;
+      var cx = e.clientX;
+      var cy = e.clientY;
       this.dragStartX = cx;
       this.dragStartY = cy;
 
@@ -397,34 +408,28 @@ var activeTools = {};
       this.ball.style.bottom = "";
       this.ball.style.left = this.ballStartX + "px";
       this.ball.style.top = this.ballStartY + "px";
-
-      document.addEventListener("mousemove", this.boundHandlers.onDragMove, { passive: false });
-      document.addEventListener("mouseup", this.boundHandlers.onDragEnd);
-      document.addEventListener("touchmove", this.boundHandlers.onDragMove, { passive: false });
-      document.addEventListener("touchend", this.boundHandlers.onDragEnd);
     },
 
     onDragMove: function (e) {
       if (!this.isDragging) return;
       e.preventDefault();
-      var cx = e.touches ? e.touches[0].clientX : e.clientX;
-      var cy = e.touches ? e.touches[0].clientY : e.clientY;
-      var dx = cx - this.dragStartX, dy = cy - this.dragStartY;
+      var dx = e.clientX - this.dragStartX, dy = e.clientY - this.dragStartY;
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) this.hasMoved = true;
       this.ball.style.left = this.clampX(this.ballStartX + dx) + "px";
       this.ball.style.top = this.clampY(this.ballStartY + dy) + "px";
     },
 
-    onDragEnd: function () {
+    onDragEnd: function (e) {
       if (!FloatingBallTool.isDragging) return;
       FloatingBallTool.isDragging = false;
       FloatingBallTool.ball.classList.remove("dragging");
+
+      if (e && FloatingBallTool.ball.releasePointerCapture) {
+        FloatingBallTool.ball.releasePointerCapture(e.pointerId);
+      }
+
       var rect = FloatingBallTool.ball.getBoundingClientRect();
       FloatingBallTool.savePosition(rect.left, rect.top);
-      document.removeEventListener("mousemove", FloatingBallTool.boundHandlers.onDragMove);
-      document.removeEventListener("mouseup", FloatingBallTool.boundHandlers.onDragEnd);
-      document.removeEventListener("touchmove", FloatingBallTool.boundHandlers.onDragMove);
-      document.removeEventListener("touchend", FloatingBallTool.boundHandlers.onDragEnd);
     },
 
     onResize: function () {
