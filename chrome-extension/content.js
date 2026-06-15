@@ -503,6 +503,7 @@ var _firstCaptureDone = false;
   // ============================================================
   var ClipboardShelfTool = {
     STORAGE_KEY: "cb_clipboard_shelf",
+    COLLAPSED_STORAGE_KEY: "cb_shelf_collapsed",
     MAX_ITEMS: 10,
     panel: null, itemList: null, toggleBtn: null, isVisible: true,
     items: [],
@@ -614,11 +615,24 @@ var _firstCaptureDone = false;
 
       // Load saved opacity
       this.loadOpacity();
+      // Restore collapsed state
+      this.loadCollapsedState();
       this.renderList();
 
       // Bind drag handlers on document
       this._onDragMove = this.onDragMove.bind(this);
       this._onDragEnd = this.onDragEnd.bind(this);
+    },
+
+    loadCollapsedState: function () {
+      var self = this;
+      chrome.storage.local.get(this.COLLAPSED_STORAGE_KEY, function (result) {
+        var collapsed = result[self.COLLAPSED_STORAGE_KEY];
+        if (collapsed && self.itemList && self.toggleBtn) {
+          self.itemList.style.display = "none";
+          self.toggleBtn.textContent = "+";
+        }
+      });
     },
 
     renderList: function () {
@@ -934,13 +948,20 @@ var _firstCaptureDone = false;
     togglePanel: function () {
       if (!this.itemList) return;
       var list = this.itemList;
+      var collapsed;
       if (list.style.display === "none") {
         list.style.display = "";
         this.toggleBtn.textContent = "\u2212";
+        collapsed = false;
       } else {
         list.style.display = "none";
         this.toggleBtn.textContent = "+";
+        collapsed = true;
       }
+      // Persist collapsed state
+      var data = {};
+      data[this.COLLAPSED_STORAGE_KEY] = collapsed;
+      chrome.storage.local.set(data);
     },
 
     clearAll: function () {
