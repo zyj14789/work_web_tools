@@ -518,16 +518,11 @@ var activeTools = {};
 
     loadAndRender: function () {
       var self = this;
+      if (!this.panel) this.buildPanel();
       chrome.storage.local.get(this.STORAGE_KEY, function (result) {
         self.items = result[self.STORAGE_KEY] || [];
-        if (self.items.length === 0 && !self.panel) {
-          self.buildPanel();
-        }
         if (self.panel) self.renderList();
       });
-      if (!this.panel && this.items.length === 0) {
-        this.buildPanel();
-      }
     },
 
     buildPanel: function () {
@@ -763,15 +758,8 @@ var activeTools = {};
           }
           this._hookedIframes = [];
         }
-        // Clean up network capture listeners on iframe docs
-        if (this._hookedIframeDocs) {
-          for (var j = 0; j < this._hookedIframeDocs.length; j++) {
-            try {
-              this._hookedIframeDocs[j].removeEventListener("cb-network-capture", onNetworkCapture);
-            } catch (e) {}
-          }
-          this._hookedIframeDocs = [];
-        }
+        // Network capture listeners on iframe docs are shared infrastructure
+        // (floatingBall depends on them), so they are NOT removed here.
         this._onCopy = null;
       }
       if (this._iframeObserver) {
@@ -858,6 +846,15 @@ var activeTools = {};
 
       // Capture focused element now (mousedown hasn't moved focus yet)
       var target = document.activeElement;
+      // Drill into same-origin iframes
+      if (target && target.tagName === 'IFRAME') {
+        try {
+          var iframeDoc = target.contentDocument;
+          if (iframeDoc && iframeDoc.activeElement) {
+            target = iframeDoc.activeElement;
+          }
+        } catch (e) {}
+      }
       this.tryPasteToFocused(text, target);
     },
 
@@ -872,10 +869,8 @@ var activeTools = {};
 
       if (!isEditable) return;
 
-      // Restore focus first -- browser autocomplete dropdowns may have stolen it
-      el.focus();
-
-      // Use rAF to let the browser settle focus before manipulating input
+      // Focus is restored inside double-rAF callback below
+      
       var self = this;
       var doPaste = function () {
         try {
@@ -896,11 +891,12 @@ var activeTools = {};
           }
 
           if (el.isContentEditable || (el.getAttribute && el.getAttribute("role") === "textbox")) {
-            var sel = window.getSelection();
+            var ownerDoc = el.ownerDocument || document;
+            var sel = ownerDoc.defaultView.getSelection();
             if (sel.rangeCount > 0) {
               var range = sel.getRangeAt(0);
               range.deleteContents();
-              var textNode = document.createTextNode(text);
+              var textNode = ownerDoc.createTextNode(text);
               range.insertNode(textNode);
               range.setStartAfter(textNode);
               range.collapse(true);
@@ -916,12 +912,11 @@ var activeTools = {};
         }
       };
 
-      // Defer paste to let focus settle (handles autocomplete popup dismissal)
-      if (typeof requestAnimationFrame !== "undefined") {
-        requestAnimationFrame(doPaste);
-      } else {
-        setTimeout(doPaste, 0);
-      }
+      // Delay paste until click chain fully completes
+      setTimeout(function () {
+        el.focus();
+        setTimeout(doPaste, 50);
+      }, 50);
     },
 
     togglePanel: function () {
