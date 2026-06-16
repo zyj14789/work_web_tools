@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "\u5de5\u5177\u96c6",
+  "version": "2.0.0",
+  "description": "\u5de5\u5177\u96c6\uff1a\u4fbf\u643a\u5de5\u5177\uff08360\u6781\u901f\u6d4f\u89c8\u5668\u7248\uff09",
+  "minimum_chrome_version": "88",
+  "permissions": ["storage", "activeTab", "clipboardWrite", "contextMenus", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "\u5de5\u5177\u96c6",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["hook.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

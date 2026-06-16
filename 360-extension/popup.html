@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工具集</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- 头部 -->
+    <header class="header">
+      <div class="header-badge">
+        <span class="header-icon">&#9881;</span>
+      </div>
+      <div class="header-text">
+        <h1 class="header-title">工具集</h1>
+        <p class="header-subtitle">便携工具</p>
+      </div>
+    </header>
+
+    <!-- 工具列表 -->
+    <main class="tool-list" id="toolList">
+      <!-- 动态渲染 -->
+    </main>
+
+    <!-- 底部状态 -->
+    <footer class="footer">
+      <span class="footer-dot" id="statusDot"></span>
+      <span id="statusText">已激活 0 个工具</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
