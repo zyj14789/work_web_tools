@@ -1,5 +1,22 @@
 (function () {
   "use strict";
+  // ===== safe chrome API wrappers (survive extension reload) =====
+  var _chromeOk = true;
+  function _checkChrome() {
+    if (!_chromeOk) return false;
+    try { if (!chrome.runtime || !chrome.runtime.id) { _chromeOk = false; return false; } }
+    catch (e) { _chromeOk = false; return false; }
+    return true;
+  }
+  function safeGet(keys, cb) {
+    if (!_checkChrome()) return;
+    try { chrome.storage.local.get(keys, cb); } catch (e) {}
+  }
+  function safeSet(data, cb) {
+    if (!_checkChrome()) return;
+    try { chrome.storage.local.set(data, cb); } catch (e) {}
+  }
+
 
   // ============================================================
   //  Step 0: Inject hook.js into page MAIN world via <script src>
@@ -121,7 +138,7 @@ var _firstCaptureDone = false;
 
   function getCustomDomains() {
     return new Promise(function (resolve) {
-      chrome.storage.local.get(SETTINGS_STORAGE_KEY, function (result) {
+      safeGet(SETTINGS_STORAGE_KEY, function (result) {
         var settings = result[SETTINGS_STORAGE_KEY] || {};
         var domains = (settings.floatingBall && settings.floatingBall.allowedDomains) || [];
         resolve(domains);
@@ -141,7 +158,7 @@ var _firstCaptureDone = false;
 
   function getToolSettings() {
     return new Promise(function (resolve) {
-      chrome.storage.local.get(SETTINGS_STORAGE_KEY, function (result) {
+      safeGet(SETTINGS_STORAGE_KEY, function (result) {
         var settings = result[SETTINGS_STORAGE_KEY] || {};
         resolve(settings.floatingBall || {});
       });
@@ -286,7 +303,7 @@ var _firstCaptureDone = false;
     getTargetUrl: function () {
       var self = this;
       return new Promise(function (resolve) {
-        chrome.storage.local.get(SETTINGS_STORAGE_KEY, function (result) {
+        safeGet(SETTINGS_STORAGE_KEY, function (result) {
           var s = (result[SETTINGS_STORAGE_KEY] && result[SETTINGS_STORAGE_KEY].floatingBall) || {};
           resolve(s.targetUrl || DEFAULT_TARGET_URL);
         });
@@ -451,12 +468,12 @@ var _firstCaptureDone = false;
 
     savePosition: function (l, t) {
       var d = {}; d[this.POS_STORAGE_KEY] = { left: l, top: t };
-      chrome.storage.local.set(d);
+      safeSet(d);
     },
 
     loadPosition: function () {
       var self = this;
-      chrome.storage.local.get(this.POS_STORAGE_KEY, function (r) {
+      safeGet(this.POS_STORAGE_KEY, function (r) {
         var p = r[self.POS_STORAGE_KEY];
         if (p && typeof p.left === "number") {
           self.ball.style.left = self.clampX(p.left) + "px";
@@ -532,7 +549,7 @@ var _firstCaptureDone = false;
     loadAndRender: function () {
       var self = this;
       if (!this.panel) this.buildPanel();
-      chrome.storage.local.get(this.STORAGE_KEY, function (result) {
+      safeGet(this.STORAGE_KEY, function (result) {
         self.items = result[self.STORAGE_KEY] || [];
         if (self.panel) self.renderList();
       });
@@ -626,7 +643,7 @@ var _firstCaptureDone = false;
 
     loadCollapsedState: function () {
       var self = this;
-      chrome.storage.local.get(this.COLLAPSED_STORAGE_KEY, function (result) {
+      safeGet(this.COLLAPSED_STORAGE_KEY, function (result) {
         var collapsed = result[self.COLLAPSED_STORAGE_KEY];
         if (collapsed && self.itemList && self.toggleBtn) {
           self.itemList.style.display = "none";
@@ -846,7 +863,7 @@ var _firstCaptureDone = false;
       var self = this;
       var data = {};
       data[this.STORAGE_KEY] = this.items;
-      chrome.storage.local.set(data, function () {
+      safeSet(data, function () {
         if (self.panel) self.renderList();
       });
     },
@@ -961,7 +978,7 @@ var _firstCaptureDone = false;
       // Persist collapsed state
       var data = {};
       data[this.COLLAPSED_STORAGE_KEY] = collapsed;
-      chrome.storage.local.set(data);
+      safeSet(data);
     },
 
     clearAll: function () {
@@ -969,7 +986,7 @@ var _firstCaptureDone = false;
       var data = {};
       data[this.STORAGE_KEY] = [];
       var self = this;
-      chrome.storage.local.set(data, function () {
+      safeSet(data, function () {
         if (self.panel) self.renderList();
       });
     },
@@ -1071,12 +1088,12 @@ var _firstCaptureDone = false;
       // Persist
       var data = {};
       data[this.OPACITY_STORAGE_KEY] = pct;
-      chrome.storage.local.set(data);
+      safeSet(data);
     },
 
     loadOpacity: function () {
       var self = this;
-      chrome.storage.local.get(this.OPACITY_STORAGE_KEY, function (result) {
+      safeGet(this.OPACITY_STORAGE_KEY, function (result) {
         var pct = result[self.OPACITY_STORAGE_KEY] || 88;
         self.panel.style.setProperty("--shelf-bg-opacity", pct / 100);
         self._currentOpacity = pct;
@@ -1123,7 +1140,7 @@ var _firstCaptureDone = false;
 
     getFullConfig: function () {
       return new Promise(function (resolve) {
-        chrome.storage.local.get(TOOLS_STORAGE_KEY, function (result) {
+        safeGet(TOOLS_STORAGE_KEY, function (result) {
           var stored = result[TOOLS_STORAGE_KEY] || {};
           var merged = {};
           for (var id in DEFAULT_TOOLS) merged[id] = stored[id] !== undefined ? stored[id] : DEFAULT_TOOLS[id].enabled;
