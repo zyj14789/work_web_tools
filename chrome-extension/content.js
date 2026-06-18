@@ -1,5 +1,13 @@
 (function () {
   "use strict";
+  // Bail out early for non-matching domains: floatingBall and network hook injection
+  // only make sense on configured domains. Clipboard shelf still activates normally.
+  var _cshost = window.location.hostname;
+  var _csmatched = false;
+  var _csdefaults = ["hrmobi.cn", "yumobi.cn", "focusmob.cn"];
+  for (var _csi = 0; _csi < _csdefaults.length; _csi++) {
+    if (_cshost === _csdefaults[_csi] || _cshost.endsWith("." + _csdefaults[_csi])) { _csmatched = true; break; }
+  }
   // ===== safe chrome API wrappers (survive extension reload) =====
   var _chromeOk = true;
   function _checkChrome() {
@@ -123,6 +131,8 @@
   };
 var activeTools = {};
 var _firstCaptureDone = false;
+// Throttle clipboard writes from network capture (min 500ms between writes)
+var _lastClipWriteTs = 0;
 
   // ===== Domain =====
   function matchesDomain(hostname, domain) {
@@ -258,12 +268,17 @@ var _firstCaptureDone = false;
     }
 
     var jsonStr = JSON.stringify(parsed, null, 2);
-    // Skip clipboard write on first capture to preserve user's existing clipboard
-    if (_firstCaptureDone) {
+    // Throttle clipboard writes: skip if last write was < 500ms ago
+    var now = Date.now();
+    if (_firstCaptureDone && now - _lastClipWriteTs >= 500) {
+      _lastClipWriteTs = now;
       copyToClipboard(jsonStr);
-    } else {
+    } else if (!_firstCaptureDone) {
       _firstCaptureDone = true;
+      _lastClipWriteTs = now;
       log("capture FIRST: skipped clipboard write to preserve user data");
+    } else {
+      log("capture THROTTLE: skipped clipboard write");
     }
 
     var ballTool = activeTools.floatingBall;
@@ -277,9 +292,88 @@ var _firstCaptureDone = false;
 
   document.addEventListener("cb-network-capture", onNetworkCapture);
 
+  // ============================================================
+  //  IframeCaptureManager - always-active network capture injection
+  //  into iframes. Shared by floatingBall (flash on capture) and
+  //  clipboardShelf (populate captures). Runs independently of
+  //  tool enable/disable toggles so network capture survives
+  //  individual tool destruction.
+  // ============================================================
+  var IframeCaptureManager = {
+    _hookedIframeDocs: new Set(),
+    _iframes: new Map(),
+
+    init: function () {
+      var self = this;
+      // Hook existing iframes
+      var iframes = document.querySelectorAll("iframe");
+      for (var i = 0; i < iframes.length; i++) {
+        self._hookIframe(iframes[i]);
+      }
+      // Watch for dynamically added iframes
+      this._observer = new MutationObserver(function (mutations) {
+        mutations.forEach(function (m) {
+          m.addedNodes.forEach(function (node) {
+            if (node.nodeName === "IFRAME") {
+              self._hookIframe(node);
+            } else if (node.querySelectorAll) {
+              var nested = node.querySelectorAll("iframe");
+              for (var j = 0; j < nested.length; j++) {
+                self._hookIframe(nested[j]);
+              }
+            }
+          });
+        });
+      });
+      this._observer.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+      log("IframeCaptureManager init");
+    },
+
+    _hookIframe: function (iframe) {
+      if (this._iframes.has(iframe)) return;
+      var self = this;
+      var onLoad = function () {
+        self._injectIntoIframeDoc(iframe);
+      };
+      iframe.addEventListener("load", onLoad);
+      this._iframes.set(iframe, { _onLoad: onLoad });
+      // If already loaded, inject immediately
+      if (iframe.contentDocument && iframe.contentDocument.readyState === "complete") {
+        onLoad();
+      }
+    },
+
+    _injectIntoIframeDoc: function (iframe) {
+      try {
+        var doc = iframe.contentDocument;
+        if (!doc) return;
+        if (this._hookedIframeDocs.has(doc)) return;
+        this._hookedIframeDocs.add(doc);
+        // Read config from main page meta
+        var mainMeta = document.querySelector('meta[name="cb-config"]');
+        var cfgContent = mainMeta ? mainMeta.content : '{"pattern":"listDataApiLog.action","captureAll":false,"showLog":false}';
+        var meta = doc.createElement("meta");
+        meta.name = "cb-config";
+        meta.content = cfgContent;
+        (doc.head || doc.documentElement).appendChild(meta);
+        var script = doc.createElement("script");
+        script.src = chrome.runtime.getURL("hook.js");
+        (doc.head || doc.documentElement).appendChild(script);
+        doc.addEventListener("cb-network-capture", onNetworkCapture);
+        log("IframeCaptureManager: injected hook into iframe");
+      } catch (e) {
+        // Cross-origin iframe - silently skip
+      }
+    },
+  };
+
   // ===== Floating ball (deferred until <body> exists) =====
   function initFloatingBall() {
-    log("initFloatingBall, hostname=" + window.location.hostname);
+    log("initTools, hostname=" + window.location.hostname);
+    IframeCaptureManager.init();
     ToolRegistry.syncTools();
   }
 
@@ -312,6 +406,12 @@ var _firstCaptureDone = false;
 
     create: function () {
       var self = this;
+      // Skip async domain check if host already matches a default domain
+      if (_csmatched) {
+        log("ball create: default domain matched, skip storage read");
+        self._doCreate();
+        return;
+      }
       isDomainAllowedAsync(window.location.hostname).then(function (allowed) {
         log("ball create: domain allowed=" + allowed);
         if (!allowed) return;
@@ -458,9 +558,16 @@ var _firstCaptureDone = false;
 
     onResize: function () {
       if (!this.ball) return;
-      var r = this.ball.getBoundingClientRect();
-      this.ball.style.left = this.clampX(r.left) + "px";
-      this.ball.style.top = this.clampY(r.top) + "px";
+      var self = this;
+      // Debounce resize to avoid layout thrashing during continuous resize
+      if (this._resizeTimer) clearTimeout(this._resizeTimer);
+      this._resizeTimer = setTimeout(function () {
+        self._resizeTimer = null;
+        if (!self.ball) return;
+        var r = self.ball.getBoundingClientRect();
+        self.ball.style.left = self.clampX(r.left) + "px";
+        self.ball.style.top = self.clampY(r.top) + "px";
+      }, 200);
     },
 
     clampX: function (x) { return Math.max(0, Math.min(x, window.innerWidth - this.BALL_SIZE)); },
@@ -689,7 +796,7 @@ var _firstCaptureDone = false;
     bindCopyListener: function () {
       var self = this;
       this._onCopy = this.onCopy.bind(this);
-      this._hookedIframes = [];
+      this._hookedIframes = new Map();
 
       // Top-level document
       document.addEventListener("copy", this._onCopy);
@@ -723,7 +830,7 @@ var _firstCaptureDone = false;
 
     _hookIframe: function (iframe) {
       // Avoid duplicate hooks on the same iframe element
-      if (this._hookedIframes.some(function (h) { return h.iframe === iframe; })) return;
+      if (this._hookedIframes.has(iframe)) return;
 
       var self = this;
       var onLoad = function () {
@@ -731,7 +838,7 @@ var _firstCaptureDone = false;
       };
 
       iframe.addEventListener("load", onLoad);
-      this._hookedIframes.push({ iframe: iframe, doc: null, _onLoad: onLoad });
+      this._hookedIframes.set(iframe, { iframe: iframe, doc: null, _onLoad: onLoad });
 
       // If the iframe is already loaded, hook immediately
       if (iframe.contentDocument && iframe.contentDocument.readyState === "complete") {
@@ -744,52 +851,23 @@ var _firstCaptureDone = false;
         var doc = iframe.contentDocument;
         if (!doc) return;
         // Skip if we already hooked this exact document object (handles re-load of same doc)
-        var entry = this._hookedIframes.filter(function (h) { return h.iframe === iframe; })[0];
+        var entry = this._hookedIframes.get(iframe);
         if (entry && entry.doc === doc) return;
         doc.addEventListener("copy", this._onCopy);
         if (entry) entry.doc = doc;
         log("ClipboardShelf: hooked iframe " + (iframe.src || "(srcdoc)").slice(0, 60));
-        // Also inject hook.js for network interception inside this iframe
-        this._injectHookIntoIframeDoc(doc);
       } catch (e) {
         // Cross-origin iframe -- can't access, silently skip
       }
     },
 
-    _injectHookIntoIframeDoc: function (doc) {
-      // Avoid double injection into the same document
-      if (!this._hookedIframeDocs) this._hookedIframeDocs = [];
-      if (this._hookedIframeDocs.indexOf(doc) !== -1) return;
-      this._hookedIframeDocs.push(doc);
-
-      // Read config from main page meta (injected during init)
-      var mainMeta = document.querySelector('meta[name="cb-config"]');
-      var cfgContent = mainMeta ? mainMeta.content : '{"pattern":"listDataApiLog.action","captureAll":false,"showLog":false}';
-
-      // Inject config meta into iframe
-      var meta = doc.createElement("meta");
-      meta.name = "cb-config";
-      meta.content = cfgContent;
-      (doc.head || doc.documentElement).appendChild(meta);
-
-      // Inject hook.js script
-      var script = doc.createElement("script");
-      script.src = chrome.runtime.getURL("hook.js");
-      (doc.head || doc.documentElement).appendChild(script);
-
-      // Listen for capture events from this iframe
-      doc.addEventListener("cb-network-capture", onNetworkCapture);
-
-      log("ClipboardShelf: injected hook into iframe");
-    },
 
     unbindCopyListener: function () {
       if (this._onCopy) {
         document.removeEventListener("copy", this._onCopy);
         // Clean up iframe listeners (both load and copy)
         if (this._hookedIframes) {
-          for (var i = 0; i < this._hookedIframes.length; i++) {
-            var h = this._hookedIframes[i];
+          this._hookedIframes.forEach(function (h) {
             // Remove load listener from the iframe element
             if (h._onLoad) {
               h.iframe.removeEventListener("load", h._onLoad);
@@ -798,8 +876,8 @@ var _firstCaptureDone = false;
             if (h.doc) {
               try { h.doc.removeEventListener("copy", this._onCopy); } catch (e) {}
             }
-          }
-          this._hookedIframes = [];
+          }, this);
+          this._hookedIframes = new Map();
         }
         // Network capture listeners on iframe docs are shared infrastructure
         // (floatingBall depends on them), so they are NOT removed here.
@@ -956,10 +1034,11 @@ var _firstCaptureDone = false;
       };
 
       // Delay paste until click chain fully completes
-      setTimeout(function () {
+      // Use rAF instead of nested setTimeouts for faster paste response
+      requestAnimationFrame(function () {
         el.focus();
-        setTimeout(doPaste, 50);
-      }, 50);
+        requestAnimationFrame(doPaste);
+      });
     },
 
     togglePanel: function () {
@@ -1183,10 +1262,6 @@ var _firstCaptureDone = false;
       if (changes[SETTINGS_STORAGE_KEY]) {
         log("storage changed, pushing config");
         pushConfigToMain();
-        if (activeTools.floatingBall) {
-          ToolRegistry.deactivateTool("floatingBall");
-          ToolRegistry.activateTool("floatingBall");
-        }
       }
       ToolRegistry.syncTools();
     }

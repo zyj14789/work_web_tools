@@ -300,9 +300,91 @@ var _firstCaptureDone = false;
 
   document.addEventListener("cb-network-capture", onNetworkCapture);
 
+  // ============================================================
+  //  IframeCaptureManager - always-active network capture injection
+  //  into iframes. Shared by floatingBall (flash on capture) and
+  //  clipboardShelf (populate captures). Runs independently of
+  //  tool enable/disable toggles so network capture survives
+  //  individual tool destruction.
+  // ============================================================
+  var IframeCaptureManager = {
+    _hookedIframeDocs: new Set(),
+    _iframes: new Map(),
+
+    init: function () {
+      var self = this;
+      // Hook existing iframes
+      var iframes = document.querySelectorAll("iframe");
+      for (var i = 0; i < iframes.length; i++) {
+        self._hookIframe(iframes[i]);
+      }
+      // Watch for dynamically added iframes
+      this._observer = new MutationObserver(function (mutations) {
+        mutations.forEach(function (m) {
+          m.addedNodes.forEach(function (node) {
+            if (node.nodeName === "IFRAME") {
+              self._hookIframe(node);
+            } else if (node.querySelectorAll) {
+              var nested = node.querySelectorAll("iframe");
+              for (var j = 0; j < nested.length; j++) {
+                self._hookIframe(nested[j]);
+              }
+            }
+          });
+        });
+      });
+      this._observer.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+      log("IframeCaptureManager init");
+    },
+
+    _hookIframe: function (iframe) {
+      if (this._iframes.has(iframe)) return;
+      var self = this;
+      var onLoad = function () {
+        self._injectIntoIframeDoc(iframe);
+      };
+      iframe.addEventListener("load", onLoad);
+      this._iframes.set(iframe, { _onLoad: onLoad });
+      // If already loaded, inject immediately
+      if (iframe.contentDocument && iframe.contentDocument.readyState === "complete") {
+        onLoad();
+      }
+    },
+
+    _injectIntoIframeDoc: function (iframe) {
+      try {
+        var doc = iframe.contentDocument;
+        if (!doc) return;
+        if (this._hookedIframeDocs.has(doc)) return;
+        this._hookedIframeDocs.add(doc);
+        // Read config from main page meta
+        var mainMeta = document.querySelector('meta[name="cb-config"]');
+        var cfgContent = mainMeta ? mainMeta.content : '{"pattern":"listDataApiLog.action","captureAll":false,"showLog":false}';
+        var meta = doc.createElement("meta");
+        meta.name = "cb-config";
+        meta.content = cfgContent;
+        (doc.head || doc.documentElement).appendChild(meta);
+        var script = doc.createElement("script");
+        var hookUrl = getHookUrl();
+        if (!hookUrl) return;
+        script.src = hookUrl;
+        script.onerror = function () { console.error("[360-extension] hook.js failed to load in iframe from: " + hookUrl); };
+        (doc.head || doc.documentElement).appendChild(script);
+        doc.addEventListener("cb-network-capture", onNetworkCapture);
+        log("IframeCaptureManager: injected hook into iframe");
+      } catch (e) {
+        // Cross-origin iframe - silently skip
+      }
+    },
+  };
+
   // ===== Floating ball (deferred until <body> exists) =====
   function initFloatingBall() {
-    log("initFloatingBall, hostname=" + window.location.hostname);
+    log("initTools, hostname=" + window.location.hostname);
+    IframeCaptureManager.init();
     ToolRegistry.syncTools();
   }
 
@@ -772,42 +854,11 @@ var _firstCaptureDone = false;
         doc.addEventListener("copy", this._onCopy);
         if (entry) entry.doc = doc;
         log("ClipboardShelf: hooked iframe " + (iframe.src || "(srcdoc)").slice(0, 60));
-        // Also inject hook.js for network interception inside this iframe
-        this._injectHookIntoIframeDoc(doc);
       } catch (e) {
         // Cross-origin iframe -- can't access, silently skip
       }
     },
 
-    _injectHookIntoIframeDoc: function (doc) {
-      // Avoid double injection into the same document
-      if (!this._hookedIframeDocs) this._hookedIframeDocs = [];
-      if (this._hookedIframeDocs.indexOf(doc) !== -1) return;
-      this._hookedIframeDocs.push(doc);
-
-      // Read config from main page meta (injected during init)
-      var mainMeta = document.querySelector('meta[name="cb-config"]');
-      var cfgContent = mainMeta ? mainMeta.content : '{"pattern":"listDataApiLog.action","captureAll":false,"showLog":false}';
-
-      // Inject config meta into iframe
-      var meta = doc.createElement("meta");
-      meta.name = "cb-config";
-      meta.content = cfgContent;
-      (doc.head || doc.documentElement).appendChild(meta);
-
-      // Inject hook.js script
-      var script = doc.createElement("script");
-      var hookUrl = getHookUrl();
-      if (!hookUrl) return;
-      script.src = hookUrl;
-      script.onerror = function () { console.error("[360-extension] hook.js failed to load in iframe from: " + hookUrl); };
-      (doc.head || doc.documentElement).appendChild(script);
-
-      // Listen for capture events from this iframe
-      doc.addEventListener("cb-network-capture", onNetworkCapture);
-
-      log("ClipboardShelf: injected hook into iframe");
-    },
 
     unbindCopyListener: function () {
       if (this._onCopy) {
